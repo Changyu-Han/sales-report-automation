@@ -47,7 +47,8 @@ def write_table(ws: Worksheet, df: pd.DataFrame, start_row: int, start_col: int 
         cell = ws.cell(row=start_row, column=start_col + j,
                        value=str(col).replace("_", " ").title())
         cell.fill, cell.font = HEADER_FILL, HEADER_FONT
-        cell.alignment = Alignment(horizontal="center")
+        numeric = pd.api.types.is_numeric_dtype(df[col])
+        cell.alignment = Alignment(horizontal="right" if numeric else "left")
     for i, row in enumerate(df.itertuples(index=False), start=1):
         for j, value in enumerate(row):
             if isinstance(value, pd.Timestamp):
@@ -57,8 +58,11 @@ def write_table(ws: Worksheet, df: pd.DataFrame, start_row: int, start_col: int 
             col_name = df.columns[j]
             if col_name in money_cols or (money_cols == ("*",) and j > 0):
                 cell.number_format = MONEY
-            elif isinstance(value, pd.Timestamp) or hasattr(value, "strftime"):
+            elif hasattr(value, "strftime"):
                 cell.number_format = "yyyy-mm-dd"
+                cell.alignment = Alignment(horizontal="left")
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                cell.number_format = "#,##0" if float(value).is_integer() else "#,##0.00"
 
 
 def autofit(ws: Worksheet, min_width: int = 10, max_width: int = 40, skip_rows: int = 0) -> None:
@@ -89,13 +93,16 @@ def summary_sheet(wb: Workbook, df: pd.DataFrame, s: dict[str, pd.DataFrame]) ->
     ]
     for j, (label, value, fmt) in enumerate(kpis):
         col = 1 + j
-        ws.cell(row=4, column=col, value=label).font = Font(color="595959")
+        label_cell = ws.cell(row=4, column=col, value=label)
+        label_cell.font = Font(color="595959")
         cell = ws.cell(row=5, column=col, value=value)
         cell.font = Font(size=14, bold=True)
         if fmt:
             cell.number_format = fmt
-        for r in (4, 5):
-            ws.cell(row=r, column=col).fill = KPI_FILL
+        for c in (label_cell, cell):  # label sits directly above its value
+            c.fill = KPI_FILL
+            c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[5].height = 24
 
     ws["A8"] = "Revenue by store"
     ws["A8"].font = Font(size=12, bold=True)
@@ -122,7 +129,11 @@ def summary_sheet(wb: Workbook, df: pd.DataFrame, s: dict[str, pd.DataFrame]) ->
         series.smooth = False
     ws.add_chart(line, f"F{start - 1}")
     autofit(ws, min_width=14, skip_rows=2)
-    ws.column_dimensions["E"].width = max(ws.column_dimensions["E"].width, len(str(best["product"])) + 4)
+    # KPI values use a larger font, so give those columns extra room.
+    for j, (_, value, _) in enumerate(kpis):
+        letter = get_column_letter(1 + j)
+        needed = len(f"{value:,.2f}" if isinstance(value, float) else str(value)) * 1.4 + 4
+        ws.column_dimensions[letter].width = max(ws.column_dimensions[letter].width, needed)
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 1
     ws.sheet_properties.pageSetUpPr.fitToPage = True
